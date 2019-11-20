@@ -1,0 +1,194 @@
+#!/usr/bin/env python
+
+import rospy
+from std_msgs.msg import Float64, String
+import os
+import math
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
+import tf
+from geometry_msgs.msg import Point, Pose, Quaternion, Twist, Vector3
+import numpy as np
+import cv2
+from cv_bridge import CvBridge, CvBridgeError
+
+from webots_ros.srv import set_int, camera_get_info
+from sensor_msgs import point_cloud2
+
+TIME_STEP = 32
+
+SPEED_UNIT = 0.0628
+INCR = 10
+ENCODER_UNIT = 159.23
+WHEEL_BASE = 0.25
+
+#TODO: Change variables for pioneer 3AT
+axis_wheel_ratio = 1
+scaling_factor = 1
+wheel_diameter_left = 0.222
+wheel_diameter_right = 0.222
+increments_per_tour = 10
+
+CONTROLLERCOUNT = 0
+ROBOT_ROSNODE = ""
+
+CAMERA_NAMES = {
+    "left": "MultiSense_S21_left_camera",
+    "right": "MultiSense_S21_right_camera",
+    "meta": "MultiSense_S21_meta_camera",
+    "depth": "MultiSense_S21_meta_range_finder"
+    }
+
+CAMERA_INFOS = {
+    "left": None,
+    "right": None,
+    "meta": None,
+    "depth": None
+}
+
+CAMERA_INFO_PUBLISHERS = {
+    "left": None,
+    "right": None,
+    "meta": None,
+    "depth": None
+}
+
+PC_PUBLISHER = None
+
+META_H = 544
+META_W = 1024
+META_F = 607.8678180488598
+META_FOV = 2*math.atan(META_W/(2*META_F))
+
+CV_BRIDGE = CvBridge()
+
+def publish_camera_info(data, args):
+    global CAMERA_NAMES, CAMERA_INFO_PUBLISHERS, ROBOT_ROSNODE
+    camera_name = args
+    if(CAMERA_INFO_PUBLISHERS[camera_name] is None):
+        publisher = rospy.Publisher(ROBOT_ROSNODE+"/"+CAMERA_NAMES[camera_name]+"/camera_info", CameraInfo, queue_size=10)
+        CAMERA_INFO_PUBLISHERS[camera_name] = publisher
+    publisher = CAMERA_INFO_PUBLISHERS[camera_name]
+    camera_info = CAMERA_INFOS[camera_name]
+    camera_info.header.stamp = data.header.stamp
+    camera_info.header.frame_id = data.header.frame_id
+    publisher.publish(camera_info)
+
+def publish_pc(data):
+    a=1
+    global PC_PUBLISHER, ROBOT_ROSNODE, CAMERA_NAMES
+    if(PC_PUBLISHER is None):
+        publisher = rospy.Publisher(ROBOT_ROSNODE+"/"+CAMERA_NAMES['depth']+"/point_cloud", PointCloud2, queue_size=10)
+        PC_PUBLISHER = publisher 
+    publisher = PC_PUBLISHER
+    
+    try:
+        depth = CV_BRIDGE.imgmsg_to_cv2(data, "32FC1")
+        depth = np.array(depth).flatten()
+    except CvBridgeError as e:
+        rospy.loginfo(e)
+
+    fov_v = 2.0 * math.atan(math.tan( META_FOV * 0.5 ) * (float(META_H) / float(META_W)) )
+    c_x = float(META_W/2.0)
+    c_y = float(META_H/2.0)
+
+    h_indices, w_indices = np.meshgrid(range(META_H), range(META_W), indexing='xy')
+    h_indices = h_indices.flatten()
+    w_indices = w_indices.flatten()
+
+    x = 2 * depth * (w_indices - c_x) * math.tan(META_FOV/2)/META_W
+    y = 2 * depth * (h_indices - c_y) * math.tan(fov_v/2)/ META_H
+    z = depth
+
+    points = [[x_, y_, z_] for x_,y_,z_ in zip(x, y, z)]
+
+    header = data.header
+    fields = [
+        PointField('x', 0, PointField.FLOAT32, 1),
+        PointField('y', 4, PointField.FLOAT32, 1),
+        PointField('z', 8, PointField.FLOAT32, 1)
+    ]
+
+    msg = point_cloud2.create_cloud(header, fields, points)
+    publisher.publish(msg)
+
+    # P3D.x= depth(x,y)*(x - c_x)/META_F # 2 * depth(x_d,y_d)* (x_d- cu) *math.tan(META_FOV/2)/ META_W
+    # P3D.y= depth(x,y)*(y - c_y)/META_F # 2 * depth(x_d,y_d) * (y_d- cv) *math.tan(fov_v/2)/ META_H
+    # P3D.x= 2 * depth(x_d,y_d)* (x_d- cu) *math.tan(META_FOV/2)/ META_W
+    # P3D.y= 2 * depth(x_d,y_d) * (y_d- cv) *math.tan(fov_v/2)/ META_H
+    # P3D.z = depth
+
+def get_model_name(data):
+    global ROBOT_ROSNODE
+    ROBOT_ROSNODE = data.data
+    rospy.loginfo(("Got the ROS node of the Robot as: " + ROBOT_ROSNODE))
+
+def enable_sensor(sensor_name):
+    global CAMERA_NAMES
+    global ROBOT_ROSNODE
+    try:
+        # Publish camera images
+        service_name = ROBOT_ROSNODE+"/"+CAMERA_NAMES[sensor_name]+"/enable"
+        rospy.wait_for_service(service_name)
+        enbale_client = rospy.ServiceProxy(service_name, set_int)
+        rep1 = enbale_client(64)
+
+        rospy.loginfo("Enabled camera: " + sensor_name)
+
+        if(not sensor_name == "depth"):
+            service_name = ROBOT_ROSNODE+"/"+CAMERA_NAMES[sensor_name]+"/get_info"
+            rospy.wait_for_service(service_name)
+            getinfo_client = rospy.ServiceProxy(service_name, camera_get_info)
+            rep2 = getinfo_client(1)
+            
+            if(CAMERA_INFOS[sensor_name] is None):
+                camera_info = CameraInfo()
+            else:
+                camera_info = CAMERA_INFOS[sensor_name]
+            
+            camera_info.width = rep2.width
+            camera_info.height = rep2.height
+            f = rep2.width/(2*math.tan(rep2.Fov/2))
+            camera_info.K[0] = f
+            camera_info.K[4] = f
+            camera_info.K[2] = rep2.width/2
+            camera_info.K[5] = rep2.height/2
+            camera_info.K[8] = 1
+            camera_info.D = [0.0, 0.0, 0.0, 0.0, 0.0]
+            camera_info.R = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+            camera_info.P = [f, 0.0, rep2.width/2, 0.0, 0.0, f, rep2.height/2, 0.0, 0.0, 0.0, 1.0, 0.0]
+            CAMERA_INFOS[sensor_name] = camera_info
+            rospy.loginfo(("Saved camera info for camera: " + sensor_name + " " + str(rep2.Fov)))
+
+            topic_name = ROBOT_ROSNODE+"/"+CAMERA_NAMES[sensor_name]+"/image"
+            rospy.Subscriber(topic_name, Image, publish_camera_info, (sensor_name))
+        else:
+            topic_name = ROBOT_ROSNODE+"/"+CAMERA_NAMES[sensor_name]+"/range_image"
+            rospy.Subscriber(topic_name, Image, publish_pc)
+
+    except rospy.ServiceException, e:
+        print "Service call failed: %s"%e
+
+if __name__ == "__main__":
+    rospy.init_node('pioneet3at_control', anonymous=True, log_level=rospy.INFO)
+    rate = rospy.Rate(10) # 10hz
+    rospy.loginfo(("Started Node with name initialized to: " + ROBOT_ROSNODE))
+    # Subscribe to model_name to get the name of the node for the robot
+    model_name_sub = rospy.Subscriber("/model_name", String, get_model_name) 
+    
+    counter = 0
+    while(ROBOT_ROSNODE == ""):
+        if(counter%200 == 0):
+            counter = 1
+        counter +=1
+    
+    rospy.loginfo(("Finally started Node with name initialized to: " + ROBOT_ROSNODE))
+    
+    enable_sensor("meta")
+    enable_sensor("depth")
+    
+    # Spin main ROS loop
+    while not rospy.is_shutdown():
+        # rospy.loginfo(("Started Node with name: " + ROBOT_ROSNODE))
+        
+        rate.sleep()
