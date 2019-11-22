@@ -12,15 +12,17 @@ import numpy as np
 import cv2
 from cv_bridge import CvBridge, CvBridgeError
 
-from webots_ros.srv import set_int, camera_get_info
+from webots_ros.srv import set_int, set_float, camera_get_info
 from sensor_msgs import point_cloud2
 
 TIME_STEP = 32
 
-SPEED_UNIT = 0.0628
-INCR = 10
+SPEED_UNIT = 9.09
+INCR = 0.01
 ENCODER_UNIT = 159.23
 WHEEL_BASE = 0.25
+MAX_SPEED = 6.4
+
 
 #TODO: Change variables for pioneer 3AT
 axis_wheel_ratio = 1
@@ -31,6 +33,27 @@ increments_per_tour = 10
 
 CONTROLLERCOUNT = 0
 ROBOT_ROSNODE = ""
+
+MOTOR_NAMES = {
+    "left_back": "back_left_wheel",
+    "right_back": "back_right_wheel",
+    "left_front": "front_left_wheel",
+    "right_front": "front_right_wheel"
+}
+
+MOTOR_VEL_CLIENT = {
+    "left_back": None,
+    "right_back": None,
+    "left_front": None,
+    "right_front": None
+}
+
+MOTOR_POS_CLIENT = {
+    "left_back": None,
+    "right_back": None,
+    "left_front": None,
+    "right_front": None
+}
 
 CAMERA_NAMES = {
     "left": "MultiSense_S21_left_camera",
@@ -62,6 +85,64 @@ META_FOV = 2*math.atan(META_W/(2*META_F))
 
 CV_BRIDGE = CvBridge()
 
+SET_VEL_CONTROL = False
+
+CURR_VELOCITY = {
+    "left_back": 0,
+    "right_back": 0,
+    "left_front": 0,
+    "right_front": 0
+}
+
+PREV_VELOCITY = {
+    "left_back": None,
+    "right_back": None,
+    "left_front": None,
+    "right_front": None
+}
+
+def set_velocity(all_wheel_velocities):
+    # rospy.loginfo("Setting all wheel velocities")
+    global MOTOR_NAMES, MOTOR_POS_CLIENT, MOTOR_VEL_CLIENT, SET_VEL_CONTROL
+    for i, motor in enumerate(MOTOR_NAMES):
+        if(MOTOR_VEL_CLIENT[motor] is None):
+            service_name = ROBOT_ROSNODE+"/"+MOTOR_NAMES[motor]+"/set_velocity"
+            rospy.wait_for_service(service_name)
+            set_velocity_client = rospy.ServiceProxy(service_name, set_float)
+            MOTOR_VEL_CLIENT[motor] = set_velocity_client
+        if(PREV_VELOCITY[motor] is None or PREV_VELOCITY[motor] != all_wheel_velocities[motor]):
+            set_velocity_client = MOTOR_VEL_CLIENT[motor]
+            set_velocity_client(SPEED_UNIT*all_wheel_velocities[motor])
+            PREV_VELOCITY[motor] = all_wheel_velocities[motor]
+            
+    if(not SET_VEL_CONTROL):
+        for motor in MOTOR_NAMES:
+            if(MOTOR_POS_CLIENT[motor] is None):
+                service_name = ROBOT_ROSNODE+"/"+MOTOR_NAMES[motor]+"/set_position"
+                rospy.wait_for_service(service_name)
+                set_position_client = rospy.ServiceProxy(service_name, set_float)
+                set_position_client(float('inf'))
+                MOTOR_POS_CLIENT[motor] = set_position_client
+        SET_VEL_CONTROL = True
+    
+    # rospy.loginfo("Done setting up all wheel velocities")
+
+def command_velocity_callback(data):
+    robot_linear_velocity = data.linear.x
+    robot_angular_velocity = data.angular.z
+
+    left_velocity = robot_linear_velocity - 0.5*robot_angular_velocity*WHEEL_BASE
+    right_velocity = robot_linear_velocity + 0.5*robot_angular_velocity*WHEEL_BASE
+    velocity = {
+        "left_back": left_velocity,
+        "right_back": right_velocity,
+        "left_front": left_velocity,
+        "right_front": right_velocity
+    }
+    if(not velocity == PREV_VELOCITY):
+        set_velocity(velocity)
+
+
 def publish_camera_info(data, args):
     global CAMERA_NAMES, CAMERA_INFO_PUBLISHERS, ROBOT_ROSNODE
     camera_name = args
@@ -75,7 +156,6 @@ def publish_camera_info(data, args):
     publisher.publish(camera_info)
 
 def publish_pc(data):
-    a=1
     global PC_PUBLISHER, ROBOT_ROSNODE, CAMERA_NAMES
     if(PC_PUBLISHER is None):
         publisher = rospy.Publisher(ROBOT_ROSNODE+"/"+CAMERA_NAMES['depth']+"/point_cloud", PointCloud2, queue_size=10)
@@ -92,7 +172,7 @@ def publish_pc(data):
     c_x = float(META_W/2.0)
     c_y = float(META_H/2.0)
 
-    h_indices, w_indices = np.meshgrid(range(META_H), range(META_W), indexing='xy')
+    h_indices, w_indices = np.meshgrid(range(META_H), range(META_W), indexing='ij')
     h_indices = h_indices.flatten()
     w_indices = w_indices.flatten()
 
@@ -186,9 +266,10 @@ if __name__ == "__main__":
     
     enable_sensor("meta")
     enable_sensor("depth")
+    set_velocity(CURR_VELOCITY)
     
+    rospy.Subscriber('cmd_vel', Twist, command_velocity_callback)
     # Spin main ROS loop
     while not rospy.is_shutdown():
         # rospy.loginfo(("Started Node with name: " + ROBOT_ROSNODE))
-        
         rate.sleep()
