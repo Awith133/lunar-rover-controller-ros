@@ -114,7 +114,7 @@ def set_velocity(all_wheel_velocities):
             set_velocity_client = MOTOR_VEL_CLIENT[motor]
             set_velocity_client(SPEED_UNIT*all_wheel_velocities[motor])
             PREV_VELOCITY[motor] = all_wheel_velocities[motor]
-            
+
     if(not SET_VEL_CONTROL):
         for motor in MOTOR_NAMES:
             if(MOTOR_POS_CLIENT[motor] is None):
@@ -167,6 +167,7 @@ def publish_pc(data):
         depth = np.array(depth).flatten()
     except CvBridgeError as e:
         rospy.loginfo(e)
+    max_depth = depth.max()
 
     fov_v = 2.0 * math.atan(math.tan( META_FOV * 0.5 ) * (float(META_H) / float(META_W)) )
     c_x = float(META_W/2.0)
@@ -180,7 +181,9 @@ def publish_pc(data):
     y = 2 * depth * (h_indices - c_y) * math.tan(fov_v/2)/ META_H
     z = depth
 
-    points = [[x_, y_, z_] for x_,y_,z_ in zip(x, y, z)]
+    # rospy.loginfo("Max and min y values of PC are: "+str(y.max()) + " " + str(y.min()))
+
+    points = [[x_, y_, z_] for x_,y_,z_ in zip(x, y, z) if (not z_==max_depth)] 
 
     header = data.header
     fields = [
