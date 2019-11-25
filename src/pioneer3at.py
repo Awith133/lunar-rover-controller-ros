@@ -19,17 +19,8 @@ TIME_STEP = 32
 
 SPEED_UNIT = 9.09
 INCR = 0.01
-ENCODER_UNIT = 159.23
-WHEEL_BASE = 0.25
+WHEEL_BASE = 0.266
 MAX_SPEED = 6.4
-
-
-#TODO: Change variables for pioneer 3AT
-axis_wheel_ratio = 1
-scaling_factor = 1
-wheel_diameter_left = 0.222
-wheel_diameter_right = 0.222
-increments_per_tour = 10
 
 CONTROLLERCOUNT = 0
 ROBOT_ROSNODE = ""
@@ -101,9 +92,18 @@ PREV_VELOCITY = {
     "right_front": None
 }
 
-def set_velocity(all_wheel_velocities):
+def set_velocity(all_wheel_velocities, speed=0):
     # rospy.loginfo("Setting all wheel velocities")
     global MOTOR_NAMES, MOTOR_POS_CLIENT, MOTOR_VEL_CLIENT, SET_VEL_CONTROL
+    if(not SET_VEL_CONTROL):
+        for motor in MOTOR_NAMES:
+            if(MOTOR_POS_CLIENT[motor] is None):
+                service_name = ROBOT_ROSNODE+"/"+MOTOR_NAMES[motor]+"/set_position"
+                rospy.wait_for_service(service_name)
+                set_position_client = rospy.ServiceProxy(service_name, set_float)
+                set_position_client(float('inf'))
+                MOTOR_POS_CLIENT[motor] = set_position_client
+        SET_VEL_CONTROL = True
     for i, motor in enumerate(MOTOR_NAMES):
         if(MOTOR_VEL_CLIENT[motor] is None):
             service_name = ROBOT_ROSNODE+"/"+MOTOR_NAMES[motor]+"/set_velocity"
@@ -114,16 +114,7 @@ def set_velocity(all_wheel_velocities):
             set_velocity_client = MOTOR_VEL_CLIENT[motor]
             set_velocity_client(SPEED_UNIT*all_wheel_velocities[motor])
             PREV_VELOCITY[motor] = all_wheel_velocities[motor]
-
-    if(not SET_VEL_CONTROL):
-        for motor in MOTOR_NAMES:
-            if(MOTOR_POS_CLIENT[motor] is None):
-                service_name = ROBOT_ROSNODE+"/"+MOTOR_NAMES[motor]+"/set_position"
-                rospy.wait_for_service(service_name)
-                set_position_client = rospy.ServiceProxy(service_name, set_float)
-                set_position_client(float('inf'))
-                MOTOR_POS_CLIENT[motor] = set_position_client
-        SET_VEL_CONTROL = True
+    
     
     # rospy.loginfo("Done setting up all wheel velocities")
 
@@ -140,7 +131,7 @@ def command_velocity_callback(data):
         "right_front": right_velocity
     }
     if(not velocity == PREV_VELOCITY):
-        set_velocity(velocity)
+        set_velocity(velocity, robot_linear_velocity)
 
 
 def publish_camera_info(data, args):
@@ -271,7 +262,7 @@ if __name__ == "__main__":
     enable_sensor("depth")
     set_velocity(CURR_VELOCITY)
     
-    rospy.Subscriber('cmd_vel', Twist, command_velocity_callback)
+    rospy.Subscriber('cmd_vel', Twist, command_velocity_callback, queue_size=1)
     # Spin main ROS loop
     while not rospy.is_shutdown():
         # rospy.loginfo(("Started Node with name: " + ROBOT_ROSNODE))

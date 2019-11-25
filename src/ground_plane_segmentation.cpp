@@ -44,12 +44,12 @@ void callback(const sensor_msgs::PointCloud2ConstPtr& input){
     Eigen::Vector3f normal;
     normal<<0,1,0;
     seg.setOptimizeCoefficients(true);
-    seg.setModelType(pcl::SACMODEL_PERPENDICULAR_PLANE);
+    seg.setModelType(pcl::SACMODEL_PLANE);
     seg.setMethodType(pcl::SAC_RANSAC);
     seg.setMaxIterations(1000);
-    seg.setAxis(normal);
-    seg.setEpsAngle(0.1);
-    // seg.setDistanceThreshold(distance_threshold);
+    // seg.setAxis(normal);
+    // seg.setEpsAngle(0.1);
+    seg.setDistanceThreshold(distance_threshold);
 
     // Segment the largest planar component from the cloud
     seg.setInputCloud(cloud);
@@ -90,7 +90,7 @@ int main(int argc, char** argv)
 
     // Params defaults
     nh.param<bool>("invert", invert, true);
-    nh.param<double>("distance_threshold", distance_threshold, 0.01);
+    nh.param<double>("distance_threshold", distance_threshold, 0.05);
     nh.param<std::string>("input", input_topic, "/apnapioneer3at/MultiSense_S21_meta_range_finder/point_cloud");
     nh.param<std::string>("output", output_topic, "/apnapioneer3at/MultiSense_S21_meta_range_finder/point_cloud_segmented");
 
