@@ -257,9 +257,10 @@ if __name__ == "__main__":
         counter +=1
     
     rospy.loginfo(("Finally started Node with name initialized to: " + ROBOT_ROSNODE))
-    
+    needDepth = rospy.get_param("show_rock_distances", 0)
     enable_sensor("meta")
-    enable_sensor("depth")
+    if(needDepth):
+        enable_sensor("depth")
     set_velocity(CURR_VELOCITY)
     
     rospy.Subscriber('cmd_vel', Twist, command_velocity_callback, queue_size=1)
