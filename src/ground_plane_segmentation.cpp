@@ -27,14 +27,17 @@ using namespace pcl::console;
 int    default_k = 0;
 double default_radius = 0.0;
 
-ros::Publisher pcl_pub;
+ros::Publisher pcl_pub, pcl_ditch_pub;
 
 // Topics
 bool invert;
 double voxel_size;
 double distance_threshold;
+double ground_depth;
 std::string input_topic;
+std::string input_topic_ditch_points;
 std::string output_topic;
+std::string output_topic_ditch;
 std::string coefficients_topic;
 
 void segment_point_cloud(const pcl::PCLPointCloud2::Ptr &input, pcl::PCLPointCloud2::Ptr &output){
@@ -82,6 +85,11 @@ void callback(const sensor_msgs::PointCloud2ConstPtr& input){
 
     segment_point_cloud(cloud_ptr, plane_cloud_ptr);
 
+    // Convert to ROS data type
+    sensor_msgs::PointCloud2 output;
+    pcl_conversions::fromPCL(*plane_cloud_ptr, output);
+    pcl_pub.publish(output);
+
     // pcl::PCLPointCloud2::Ptr plane_cloud_ptr1(new pcl::PCLPointCloud2);
 
     // segment_point_cloud(plane_cloud_ptr, plane_cloud_ptr1);
@@ -96,11 +104,6 @@ void callback(const sensor_msgs::PointCloud2ConstPtr& input){
 
     
     // if (debug) std::cerr << "PointCloud representing the planar component: " << plane_cloud_ptr->width << " " << plane_cloud_ptr->height << " data points." << std::endl;
-
-    // Convert to ROS data type
-    sensor_msgs::PointCloud2 output;
-    pcl_conversions::fromPCL(*plane_cloud_ptr, output);
-    pcl_pub.publish(output);
 }
 
 
@@ -210,6 +213,32 @@ void callback(const sensor_msgs::PointCloud2ConstPtr& input){
 //   return (0);
 // }
 
+void publish_ditch_point_cloud(const sensor_msgs::PointCloud2ConstPtr& input){
+    pcl::PCLPointCloud2::Ptr cloud_ptr(new pcl::PCLPointCloud2);
+    pcl_conversions::toPCL(*input, *cloud_ptr);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloudxyz (new pcl::PointCloud<pcl::PointXYZ>);
+    fromPCLPointCloud2 (*cloud_ptr, *cloudxyz);
+
+    for (std::size_t i = 0; i < cloudxyz->points.size (); ++i)
+    {
+        if(cloudxyz->points[i].y!=0){
+            cloudxyz->points[i].x = cloudxyz->points[i].x * ground_depth / cloudxyz->points[i].y;
+            cloudxyz->points[i].z = cloudxyz->points[i].z * ground_depth / cloudxyz->points[i].y;
+            cloudxyz->points[i].y = cloudxyz->points[i].y * ground_depth / cloudxyz->points[i].y;
+            // cout<<"After "<< cloudxyz->points[i].y<<" Value: "<<cloudxyz->points[i].z<<endl;
+        }
+    }
+
+    pcl::PCLPointCloud2::Ptr output_cloud_ptr(new pcl::PCLPointCloud2);
+    toPCLPointCloud2(*cloudxyz, *output_cloud_ptr);
+
+    sensor_msgs::PointCloud2 output;
+    pcl_conversions::fromPCL(*output_cloud_ptr, output);
+
+    pcl_ditch_pub.publish(output);
+}
+
 
 int main(int argc, char** argv)
 {
@@ -223,19 +252,26 @@ int main(int argc, char** argv)
     nh.getParam("distance_threshold", distance_threshold);
     nh.getParam("input", input_topic);
     nh.getParam("output", output_topic);
+    nh.getParam("output_ditch", output_topic_ditch);
     nh.getParam("plane_coefficients", coefficients_topic);
+    nh.getParam("ground_depth", ground_depth);
 
     // Params defaults
     nh.param<bool>("invert", invert, true);
     nh.param<double>("distance_threshold", distance_threshold, 0.05);
-    nh.param<std::string>("input", input_topic, "/apnapioneer3at/MultiSense_S21_meta_range_finder/point_cloud");
+    nh.param<std::string>("input", input_topic, "/points/filtered");
+    nh.param<std::string>("input_topic_ditch_points", input_topic_ditch_points, "/points/filtered_inverse_negetive");
     nh.param<std::string>("output", output_topic, "/apnapioneer3at/MultiSense_S21_meta_range_finder/point_cloud_segmented");
+    nh.param<std::string>("output_ditch", output_topic_ditch, "/points/ditch");
+    nh.param<double>("ground_depth", ground_depth, 0.275);
 
      // Create a ROS subscriber for the input point cloud
     ros::Subscriber sub = nh.subscribe(input_topic, 1, callback);
+    ros::Subscriber sub_ditch = nh.subscribe(input_topic_ditch_points, 1, publish_ditch_point_cloud);
 
     // Create a ROS publisher for the output segmented point cloud and coefficients
     pcl_pub = nh.advertise<sensor_msgs::PointCloud2>(output_topic, 1);
+    pcl_ditch_pub = nh.advertise<sensor_msgs::PointCloud2>(output_topic_ditch, 1);
     // coef_pub = nh.advertise<pcl_msgs::ModelCoefficients>(coefficients_topic, 1);
 
     // Spin

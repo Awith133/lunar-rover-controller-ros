@@ -138,7 +138,11 @@ def publish_camera_info(data, args):
     global CAMERA_NAMES, CAMERA_INFO_PUBLISHERS, ROBOT_ROSNODE
     camera_name = args
     if(CAMERA_INFO_PUBLISHERS[camera_name] is None):
-        publisher = rospy.Publisher(ROBOT_ROSNODE+"/"+CAMERA_NAMES[camera_name]+"/camera_info", CameraInfo, queue_size=10)
+        if(camera_name == "meta"):
+            hack_camera_name = "depth"
+        else:
+            hack_camera_name = camera_name
+        publisher = rospy.Publisher(ROBOT_ROSNODE+"/"+CAMERA_NAMES[hack_camera_name]+"/camera_info", CameraInfo, queue_size=10)
         CAMERA_INFO_PUBLISHERS[camera_name] = publisher
     publisher = CAMERA_INFO_PUBLISHERS[camera_name]
     camera_info = CAMERA_INFOS[camera_name]
@@ -238,7 +242,7 @@ def enable_sensor(sensor_name):
             rospy.Subscriber(topic_name, Image, publish_camera_info, (sensor_name))
         else:
             topic_name = ROBOT_ROSNODE+"/"+CAMERA_NAMES[sensor_name]+"/range_image"
-            rospy.Subscriber(topic_name, Image, publish_pc)
+            # rospy.Subscriber(topic_name, Image, publish_pc)
 
     except rospy.ServiceException, e:
         print "Service call failed: %s"%e
@@ -259,8 +263,8 @@ if __name__ == "__main__":
     rospy.loginfo(("Finally started Node with name initialized to: " + ROBOT_ROSNODE))
     needDepth = rospy.get_param("show_rock_distances", 0)
     enable_sensor("meta")
-    if(needDepth):
-        enable_sensor("depth")
+    # if(needDepth):
+    enable_sensor("depth")
     set_velocity(CURR_VELOCITY)
     
     rospy.Subscriber('cmd_vel', Twist, command_velocity_callback, queue_size=1)
